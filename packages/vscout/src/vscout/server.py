@@ -149,6 +149,14 @@ def get_status():
     )
 
 
+@app.post("/api/stop")
+def stop_analyze():
+    if not current_job.is_running:
+        raise HTTPException(status_code=400, detail="No job is running")
+    current_job.status = "stopping"
+    return {"message": "Stop requested"}
+
+
 @app.post("/api/analyze")
 def start_analyze(req: AnalyzeRequest, background_tasks: BackgroundTasks):
     if current_job.is_running:
