@@ -1,18 +1,20 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { Videos } from './pages/Videos';
-import { Rounds } from './pages/Rounds';
-import { Analysis } from './pages/Analysis';
+import { Layout } from './components/Layout';
+import { Sessions } from './pages/Sessions';
+import { MatchView } from './pages/MatchView';
+import { Analyze } from './pages/Analyze';
 
 function App() {
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Videos />} />
-        <Route path="/rounds" element={<Rounds />} />
-        <Route path="/analysis" element={<Analysis />} />
-        <Route path="/config" element={<div style={{ padding: '2rem' }}>Config Placeholder</div>} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      <Layout>
+        <Routes>
+          <Route path="/" element={<Sessions />} />
+          <Route path="/match/:sessionId/:mapPath/*" element={<MatchView />} />
+          <Route path="/analyze" element={<Analyze />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Layout>
     </BrowserRouter>
   );
 }

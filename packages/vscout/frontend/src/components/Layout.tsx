@@ -1,28 +1,13 @@
-import React, { ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { Sidebar } from './Sidebar';
 
-interface LayoutProps {
-    children: ReactNode;
-    title?: string;
-    actions?: ReactNode;
+export function Layout({ children }: { children: ReactNode }) {
+  return (
+    <div style={{ display: 'flex', minHeight: '100vh', background: '#0f0f0f' }}>
+      <Sidebar />
+      <main style={{ flex: 1, padding: '2rem', overflow: 'auto' }}>
+        {children}
+      </main>
+    </div>
+  );
 }
-
-export const Layout: React.FC<LayoutProps> = ({ children, title, actions }) => {
-    return (
-        <div style={{ display: 'flex' }}>
-            <Sidebar />
-            <div className="main-content" style={{ flex: 1 }}>
-                <header style={{
-                    marginBottom: '2rem',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center'
-                }}>
-                    {title && <h1>{title}</h1>}
-                    {actions && <div>{actions}</div>}
-                </header>
-                <main>{children}</main>
-            </div>
-        </div>
-    );
-};

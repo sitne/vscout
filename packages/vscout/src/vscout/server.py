@@ -12,8 +12,9 @@ from pathlib import Path
 from typing import Optional
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -132,7 +133,7 @@ def run_valoscribe_task(job_id: str, req: AnalyzeRequest):
 # ---------------------------------------------------------------------------
 # API endpoints
 # ---------------------------------------------------------------------------
-@app.get("/")
+@app.get("/api/health")
 def health():
     return {"app": "V-SCOUT", "status": "running"}
 
@@ -172,7 +173,7 @@ def list_sessions():
             "session_id": d.name,
             "maps": [
                 {
-                    "path": str(el.parent.relative_to(DATA_DIR)),
+                    "path": str(el.parent.relative_to(d)),
                     "name": el.parent.parent.name if el.parent.name == "output" else el.parent.name,
                 }
                 for el in event_logs
@@ -181,84 +182,15 @@ def list_sessions():
     return {"sessions": sessions}
 
 
-@app.get("/api/matches/{session_id}/{map_path:path}")
-def get_match(session_id: str, map_path: str):
-    """Get full match data for a specific map."""
-    output_dir = DATA_DIR / session_id / map_path
-    if not output_dir.exists():
-        raise HTTPException(status_code=404, detail="Match output not found")
-
-    try:
-        match = load_match(output_dir)
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
-    return {
-        "team1": match.team1,
-        "team2": match.team2,
-        "map_name": match.map_name,
-        "final_score": match.final_score,
-        "winner": match.winner,
-        "total_events": len(match.events),
-        "total_rounds": len(match.rounds),
-        "rounds": [
-            {
-                "round_number": r.round_number,
-                "start_timestamp": r.start_timestamp,
-                "end_timestamp": r.end_timestamp,
-                "duration": r.duration,
-                "score": (r.score_team1, r.score_team2),
-                "winner": r.winner,
-                "kills": len(r.kills),
-                "abilities": len(r.abilities),
-                "ultimates": len(r.ultimates),
-                "spike_events": len(r.spike_events),
-            }
-            for r in match.rounds
-        ],
-    }
-
-
-@app.get("/api/matches/{session_id}/{map_path:path}/events")
-def get_match_events(
-    session_id: str,
-    map_path: str,
-    event_type: Optional[str] = None,
-    round_number: Optional[int] = None,
-):
-    """Get events for a match, optionally filtered."""
-    output_dir = DATA_DIR / session_id / map_path
-    try:
-        match = load_match(output_dir)
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
-    events = match.events
-    if event_type:
-        events = [e for e in events if e.type == event_type]
-    if round_number is not None:
-        rd = match.get_round(round_number)
-        if rd:
-            events = [
-                e for e in events
-                if rd.start_timestamp <= e.timestamp <= (rd.end_timestamp or float("inf"))
-            ]
-        else:
-            events = []
-
-    return {
-        "count": len(events),
-        "events": [
-            {"type": e.type, "timestamp": e.timestamp, **e.data}
-            for e in events
-        ],
-    }
+def _resolve_output_dir(session_id: str, map_path: str) -> Path:
+    """Resolve the output directory for a session/map."""
+    return DATA_DIR / session_id / map_path
 
 
 @app.get("/api/matches/{session_id}/{map_path:path}/rounds/{round_number}")
 def get_round_detail(session_id: str, map_path: str, round_number: int):
     """Get detailed data for a specific round."""
-    output_dir = DATA_DIR / session_id / map_path
+    output_dir = _resolve_output_dir(session_id, map_path)
     try:
         match = load_match(output_dir)
     except FileNotFoundError as e:
@@ -298,10 +230,46 @@ def get_round_detail(session_id: str, map_path: str, round_number: int):
     }
 
 
+@app.get("/api/matches/{session_id}/{map_path:path}/events")
+def get_match_events(
+    session_id: str,
+    map_path: str,
+    event_type: Optional[str] = None,
+    round_number: Optional[int] = None,
+):
+    """Get events for a match, optionally filtered."""
+    output_dir = _resolve_output_dir(session_id, map_path)
+    try:
+        match = load_match(output_dir)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    events = match.events
+    if event_type:
+        events = [e for e in events if e.type == event_type]
+    if round_number is not None:
+        rd = match.get_round(round_number)
+        if rd:
+            events = [
+                e for e in events
+                if rd.start_timestamp <= e.timestamp <= (rd.end_timestamp or float("inf"))
+            ]
+        else:
+            events = []
+
+    return {
+        "count": len(events),
+        "events": [
+            {"type": e.type, "timestamp": e.timestamp, **e.data}
+            for e in events
+        ],
+    }
+
+
 @app.get("/api/matches/{session_id}/{map_path:path}/kills")
 def get_kill_timeline(session_id: str, map_path: str):
     """Get kill timeline for a match."""
-    output_dir = DATA_DIR / session_id / map_path
+    output_dir = _resolve_output_dir(session_id, map_path)
     try:
         match = load_match(output_dir)
     except FileNotFoundError as e:
@@ -315,6 +283,61 @@ def get_kill_timeline(session_id: str, map_path: str):
             for e in kills
         ],
     }
+
+
+@app.get("/api/matches/{session_id}/{map_path:path}")
+def get_match(session_id: str, map_path: str):
+    """Get full match data for a specific map."""
+    output_dir = _resolve_output_dir(session_id, map_path)
+    if not output_dir.exists():
+        raise HTTPException(status_code=404, detail="Match output not found")
+
+    try:
+        match = load_match(output_dir)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    return {
+        "team1": match.team1,
+        "team2": match.team2,
+        "map_name": match.map_name,
+        "final_score": match.final_score,
+        "winner": match.winner,
+        "total_events": len(match.events),
+        "total_rounds": len(match.rounds),
+        "rounds": [
+            {
+                "round_number": r.round_number,
+                "start_timestamp": r.start_timestamp,
+                "end_timestamp": r.end_timestamp,
+                "duration": r.duration,
+                "score": (r.score_team1, r.score_team2),
+                "winner": r.winner,
+                "kills": len(r.kills),
+                "abilities": len(r.abilities),
+                "ultimates": len(r.ultimates),
+                "spike_events": len(r.spike_events),
+            }
+            for r in match.rounds
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Frontend static files (must be after all API routes)
+# ---------------------------------------------------------------------------
+FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+
+if FRONTEND_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIR / "assets"), name="frontend-assets")
+
+    @app.get("/{path:path}")
+    async def serve_frontend(request: Request, path: str):
+        """Serve React SPA — all non-API routes return index.html."""
+        file = FRONTEND_DIR / path
+        if file.exists() and file.is_file():
+            return FileResponse(file)
+        return FileResponse(FRONTEND_DIR / "index.html")
 
 
 def main():
