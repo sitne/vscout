@@ -21,13 +21,18 @@ log = get_logger(__name__)
 class Cropper:
     """Crops HUD elements from Valorant frames based on JSON configuration."""
 
-    def __init__(self, config_path: str | Path = "src/valoscribe/config/champs2025.json"):
+    # Default config resolved relative to package, not cwd
+    _DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "config" / "champs2025.json"
+
+    def __init__(self, config_path: str | Path | None = None):
         """
         Initialize cropper with HUD coordinate configuration.
 
         Args:
             config_path: Path to JSON configuration file with HUD coordinates
         """
+        if config_path is None:
+            config_path = self._DEFAULT_CONFIG
         self.config = self._load_config(config_path)
         self.regions = self.config["regions"]
         log.info(f"Loaded HUD config: {self.config['name']}")
