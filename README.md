@@ -42,49 +42,60 @@ vscout/
 ### インストール
 
 ```bash
-# 依存インストール
+# 依存インストール（Python + エントリポイント登録）
 uv sync
+
+# フロントエンドビルド
+cd packages/vscout/frontend && npm install && npm run build && cd ../../..
 
 # Tesseract (Ubuntu/Debian)
 sudo apt-get install tesseract-ocr ffmpeg
 
-# deno
+# deno (yt-dlpのYouTube JS challenge解決用)
 curl -fsSL https://deno.land/install.sh | sh
 ```
 
+> **Note**: `uv sync` を実行しないと `uv run vscout` で "No such file or directory" エラーが出ます。
+
 ## 使い方
 
-### 1. VOD解析（valoscribe）
+### Webダッシュボード起動
 
 ```bash
-# VLR.ggのURLから全マップを処理
-uv run bash scripts/process_vlr_series.sh "https://www.vlr.gg/MATCH_ID/..."
-
-# 単体動画を処理
-uv run valoscribe orchestrate process \
-  --video-path ./video.mp4 \
-  --output-dir ./data/session_name/map1/output
+uv run vscout
+# http://localhost:8000 でアクセス
 ```
 
-### 2. Webダッシュボード（vscout）
+UIからVLR.gg URLを入力すると、自動でスクレイピング→VODダウンロード→解析まで実行されます。
+
+### CLIでのVOD解析（valoscribe単体）
 
 ```bash
-# APIサーバー起動
-uv run vscout
+# VLR.ggスクレイピング
+uv run valoscribe scrape-vlr "https://www.vlr.gg/MATCH_ID/..." -o match.json
 
-# http://localhost:8000 でアクセス
+# メタデータ分割
+uv run valoscribe split-metadata match.json -o ./maps/
+
+# VODダウンロード
+uv run valoscribe download "https://youtube.com/watch?v=..." -o ./videos/
+
+# VOD解析
+uv run valoscribe orchestrate process-vod video.mp4 maps/map1.json -o ./output/
 ```
 
 ### API エンドポイント
 
 | メソッド | パス | 説明 |
 |---------|------|------|
+| POST | `/api/analyze` | VLR分析パイプライン開始 (`{vlr_url}`) |
+| GET | `/api/status` | パイプライン進捗・ステップログ |
+| POST | `/api/stop` | 実行中のパイプラインをキャンセル |
 | GET | `/api/sessions` | セッション一覧 |
-| GET | `/api/matches/{session}/{map}/` | 試合概要 |
+| GET | `/api/matches/{session}/{map}` | 試合概要 |
 | GET | `/api/matches/{session}/{map}/events` | イベント一覧 |
 | GET | `/api/matches/{session}/{map}/rounds/{n}` | ラウンド詳細 |
 | GET | `/api/matches/{session}/{map}/kills` | キルタイムライン |
-| POST | `/api/analyze` | VOD解析開始 |
 
 ## 開発
 
