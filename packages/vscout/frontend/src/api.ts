@@ -11,7 +11,11 @@ export interface JobStatus {
   is_running: boolean;
   progress: number;
   status: string;
+  current_step: string;
+  total_maps: number;
+  current_map: number;
   session_id: string | null;
+  steps_log: string[];
 }
 
 export interface MapInfo {
@@ -119,15 +123,8 @@ export const getKillTimeline = async (sessionId: string, mapPath: string) => {
   return res.data;
 };
 
-export const startAnalyze = async (params: {
-  vlr_url?: string;
-  youtube_url?: string;
-  local_video_path?: string;
-  start_time?: number;
-  duration?: number;
-  session_id?: string;
-}) => {
-  const res = await api.post('/api/analyze', params);
+export const startAnalyze = async (vlrUrl: string) => {
+  const res = await api.post('/api/analyze', { vlr_url: vlrUrl });
   return res.data;
 };
 

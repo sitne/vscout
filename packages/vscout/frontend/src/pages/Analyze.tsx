@@ -3,36 +3,23 @@ import type { KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Layout } from '../components/Layout';
 import { startAnalyze } from '../api';
-import { Play, AlertCircle } from 'lucide-react';
-
-const parseTime = (t: string): number => {
-  if (!t) return 0;
-  t = t.trim();
-  if (t.includes(':')) {
-    const parts = t.split(':').map(Number).filter((n) => !isNaN(n));
-    if (parts.length === 2) return parts[0] * 60 + parts[1];
-    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  }
-  return parseFloat(t) || 0;
-};
+import { Play, AlertCircle, ExternalLink } from 'lucide-react';
 
 export function Analyze() {
   const navigate = useNavigate();
   const [vlrUrl, setVlrUrl] = useState('');
-  const [youtubeUrl, setYoutubeUrl] = useState('');
-  const [startTime, setStartTime] = useState('');
-  const [endTime, setEndTime] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   const validate = (): boolean => {
     setError('');
-    if (!vlrUrl && !youtubeUrl) {
-      setError('VLR URLまたはYouTube URLを入力してください');
+    const url = vlrUrl.trim();
+    if (!url) {
+      setError('VLR.gg URLを入力してください');
       return false;
     }
-    if (startTime && endTime && parseTime(startTime) > parseTime(endTime)) {
-      setError('開始時刻は終了時刻より前である必要があります');
+    if (!url.includes('vlr.gg')) {
+      setError('有効なVLR.gg URLを入力してください (例: https://www.vlr.gg/626529/...)');
       return false;
     }
     return true;
@@ -43,16 +30,16 @@ export function Analyze() {
     try {
       setLoading(true);
       setError('');
-      await startAnalyze({
-        vlr_url: vlrUrl || undefined,
-        youtube_url: youtubeUrl || undefined,
-        start_time: startTime ? parseTime(startTime) : undefined,
-        duration: endTime ? parseTime(endTime) - (startTime ? parseTime(startTime) : 0) : undefined,
-      });
+      await startAnalyze(vlrUrl.trim());
       navigate('/analysis');
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setError('分析の開始に失敗しました: ' + msg);
+      if (e && typeof e === 'object' && 'response' in e) {
+        const axiosErr = e as { response?: { data?: { detail?: string } } };
+        setError(axiosErr.response?.data?.detail || '分析の開始に失敗しました');
+      } else {
+        const msg = e instanceof Error ? e.message : String(e);
+        setError('分析の開始に失敗しました: ' + msg);
+      }
     } finally {
       setLoading(false);
     }
@@ -63,7 +50,7 @@ export function Analyze() {
   };
 
   return (
-    <Layout title="ビデオ分析">
+    <Layout title="VLR 分析">
       <div className="card" style={{ maxWidth: 600, margin: '0 auto', padding: '1.5rem' }}>
         <h3
           style={{
@@ -96,135 +83,100 @@ export function Analyze() {
         )}
 
         <div style={{ display: 'grid', gap: '1.5rem' }} onKeyDown={handleKeyDown}>
-          {/* ビデオソース */}
+          {/* VLR URL 入力 */}
           <div>
-            <div
+            <label
               style={{
+                display: 'block',
+                marginBottom: '0.5rem',
                 fontSize: '0.9rem',
                 fontWeight: 600,
-                marginBottom: '0.75rem',
                 color: 'var(--text-secondary)',
                 textTransform: 'uppercase',
                 letterSpacing: '0.05em',
               }}
             >
-              ビデオソース (必須)
-            </div>
-            <div style={{ display: 'grid', gap: '1rem' }}>
-              <div>
-                <label
-                  style={{
-                    display: 'block',
-                    marginBottom: '0.5rem',
-                    fontSize: '0.85rem',
-                    fontWeight: 500,
-                  }}
-                >
-                  VLR.gg URL
-                </label>
-                <input
-                  type="text"
-                  value={vlrUrl}
-                  onChange={(e) => setVlrUrl(e.target.value)}
-                  placeholder="https://www.vlr.gg/626529/..."
-                  style={{ width: '100%' }}
-                />
-              </div>
-
-              <div
-                style={{
-                  textAlign: 'center',
-                  color: 'var(--text-secondary)',
-                  fontSize: '0.85rem',
-                }}
-              >
-                または
-              </div>
-
-              <div>
-                <label
-                  style={{
-                    display: 'block',
-                    marginBottom: '0.5rem',
-                    fontSize: '0.85rem',
-                    fontWeight: 500,
-                  }}
-                >
-                  YouTube URL
-                </label>
-                <input
-                  type="text"
-                  value={youtubeUrl}
-                  onChange={(e) => setYoutubeUrl(e.target.value)}
-                  placeholder="https://www.youtube.com/watch?v=..."
-                  style={{ width: '100%' }}
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* 分析範囲 */}
-          <div>
-            <div
-              style={{
-                fontSize: '0.9rem',
-                fontWeight: 600,
-                marginBottom: '0.75rem',
-                color: 'var(--text-secondary)',
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em',
-              }}
-            >
-              分析範囲 (オプション)
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-              <div>
-                <label
-                  style={{
-                    display: 'block',
-                    marginBottom: '0.5rem',
-                    fontSize: '0.85rem',
-                    fontWeight: 500,
-                  }}
-                >
-                  開始時刻
-                </label>
-                <input
-                  type="text"
-                  value={startTime}
-                  onChange={(e) => setStartTime(e.target.value)}
-                  placeholder="mm:ss または秒数"
-                  style={{ width: '100%' }}
-                />
-              </div>
-              <div>
-                <label
-                  style={{
-                    display: 'block',
-                    marginBottom: '0.5rem',
-                    fontSize: '0.85rem',
-                    fontWeight: 500,
-                  }}
-                >
-                  終了時刻
-                </label>
-                <input
-                  type="text"
-                  value={endTime}
-                  onChange={(e) => setEndTime(e.target.value)}
-                  placeholder="mm:ss または秒数"
-                  style={{ width: '100%' }}
-                />
-              </div>
-            </div>
+              VLR.gg マッチ URL
+            </label>
+            <input
+              type="text"
+              value={vlrUrl}
+              onChange={(e) => setVlrUrl(e.target.value)}
+              placeholder="https://www.vlr.gg/626529/..."
+              style={{ width: '100%' }}
+              autoFocus
+            />
             <div
               style={{
                 fontSize: '0.8rem',
                 color: 'var(--text-secondary)',
                 marginTop: '0.5rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
               }}
             >
-              形式: 00:00 (分:秒) または 0 (秒数)
+              <ExternalLink size={12} />
+              VLR.ggのマッチページURLを貼り付けてください
+            </div>
+          </div>
+
+          {/* 処理フロー説明 */}
+          <div
+            style={{
+              background: 'var(--bg-primary)',
+              border: '1px solid var(--border)',
+              borderRadius: 4,
+              padding: '1rem',
+            }}
+          >
+            <div
+              style={{
+                fontSize: '0.85rem',
+                fontWeight: 600,
+                color: 'var(--text-secondary)',
+                marginBottom: '0.75rem',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+              }}
+            >
+              処理フロー
+            </div>
+            <div style={{ display: 'grid', gap: '0.5rem', fontSize: '0.85rem' }}>
+              {[
+                { step: '1', text: 'VLR.ggからマッチメタデータをスクレイピング' },
+                { step: '2', text: '各マップのYouTube VODを自動ダウンロード' },
+                { step: '3', text: 'コンピュータビジョンでVODを解析' },
+                { step: '4', text: 'イベントタイムラインを生成 (キル/スパイク/ULT)' },
+              ].map((item) => (
+                <div
+                  key={item.step}
+                  style={{
+                    display: 'flex',
+                    gap: '0.75rem',
+                    alignItems: 'center',
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: '50%',
+                      background: 'var(--accent-glow)',
+                      color: 'var(--accent)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '0.75rem',
+                      fontWeight: 700,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {item.step}
+                  </span>
+                  <span style={{ color: 'var(--text-primary)' }}>{item.text}</span>
+                </div>
+              ))}
             </div>
           </div>
 
@@ -232,7 +184,7 @@ export function Analyze() {
           <button
             className="btn btn-primary"
             style={{
-              marginTop: '1rem',
+              marginTop: '0.5rem',
               justifyContent: 'center',
               padding: '0.75rem 1.5rem',
               opacity: loading ? 0.6 : 1,
@@ -242,7 +194,7 @@ export function Analyze() {
             disabled={loading}
           >
             <Play size={18} />
-            {loading ? '分析中...' : 'ビデオを分析'}
+            {loading ? '開始中...' : '分析を開始'}
           </button>
           <div
             style={{

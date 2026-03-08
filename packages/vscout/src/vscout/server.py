@@ -1,25 +1,25 @@
 """V-SCOUT API server.
 
 Provides REST API for:
-- Running valoscribe analysis on VODs
+- Running valoscribe VLR analysis pipeline
 - Browsing match data (events, rounds, player states)
 - Session management
 """
 
-import subprocess
+import threading
 import uuid
 from pathlib import Path
 from typing import Optional
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from vscout.data_loader import load_match, MatchData
-from vscout.session_manager import SessionManager
+from vscout.data_loader import load_match
+from vscout.pipeline import PipelineState, run_vlr_pipeline
 from vscout.utils import setup_logger
 
 logger = setup_logger("Server")
@@ -37,97 +37,45 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-session_manager = SessionManager(str(DATA_DIR))
-
 
 # ---------------------------------------------------------------------------
-# Job state
+# Pipeline state (singleton)
 # ---------------------------------------------------------------------------
-class JobState:
-    id: Optional[str] = None
-    is_running: bool = False
-    progress: float = 0.0
-    status: str = "idle"
-    session_id: Optional[str] = None
-
-
-current_job = JobState()
+current_pipeline: PipelineState | None = None
 
 
 # ---------------------------------------------------------------------------
 # Request / Response models
 # ---------------------------------------------------------------------------
 class AnalyzeRequest(BaseModel):
-    """Request to start VOD analysis."""
-    vlr_url: Optional[str] = None
-    youtube_url: Optional[str] = None
-    local_video_path: Optional[str] = None
-    start_time: Optional[float] = None
-    duration: Optional[float] = None
-    session_id: Optional[str] = None
+    """Request to start VLR analysis."""
+    vlr_url: str
 
 
 class JobStatus(BaseModel):
-    id: Optional[str]
+    id: str | None
     is_running: bool
     progress: float
     status: str
-    session_id: Optional[str] = None
+    current_step: str
+    total_maps: int
+    current_map: int
+    session_id: str | None = None
+    steps_log: list[str] = []
 
 
 # ---------------------------------------------------------------------------
-# Background analysis task
+# Background worker
 # ---------------------------------------------------------------------------
-def run_valoscribe_task(job_id: str, req: AnalyzeRequest):
-    """Run valoscribe in a subprocess."""
-    global current_job
-    current_job.id = job_id
-    current_job.is_running = True
-    current_job.status = "processing"
-    current_job.progress = 0.0
-
-    session_id = req.session_id or f"vs_{uuid.uuid4().hex[:12]}"
-    current_job.session_id = session_id
-    output_dir = DATA_DIR / session_id
-    output_dir.mkdir(parents=True, exist_ok=True)
-
+def _pipeline_thread(state: PipelineState, vlr_url: str, output_dir: Path) -> None:
+    """Thin wrapper so that run_vlr_pipeline runs in a daemon thread."""
     try:
-        if req.vlr_url:
-            # Use the shell script for full VLR pipeline
-            cmd = [
-                "bash", "packages/valoscribe/scripts/process_vlr_series.sh",
-                req.vlr_url, str(output_dir),
-            ]
-        elif req.youtube_url or req.local_video_path:
-            # Direct valoscribe orchestrate
-            cmd = ["uv", "run", "valoscribe", "orchestrate", "process"]
-            if req.youtube_url:
-                cmd += ["--youtube-url", req.youtube_url]
-            if req.local_video_path:
-                cmd += ["--video-path", req.local_video_path]
-            cmd += ["--output-dir", str(output_dir)]
-            if req.start_time is not None:
-                cmd += ["--start-time", str(req.start_time)]
-        else:
-            raise ValueError("Provide vlr_url, youtube_url, or local_video_path")
-
-        logger.info(f"Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
-
-        if result.returncode == 0:
-            current_job.status = "completed"
-            current_job.progress = 1.0
-        else:
-            logger.error(f"valoscribe failed: {result.stderr[-500:]}")
-            current_job.status = f"error: {result.stderr[-200:]}"
-
-    except subprocess.TimeoutExpired:
-        current_job.status = "error: timeout (2h)"
-    except Exception as e:
-        logger.error(f"Job failed: {e}")
-        current_job.status = f"error: {str(e)}"
-    finally:
-        current_job.is_running = False
+        run_vlr_pipeline(state, vlr_url, output_dir)
+    except Exception as exc:
+        logger.exception("Pipeline thread crashed: %s", exc)
+        state.status = f"error: {exc}"
+        state.error = str(exc)
+        state.is_running = False
 
 
 # ---------------------------------------------------------------------------
@@ -140,29 +88,61 @@ def health():
 
 @app.get("/api/status")
 def get_status():
+    if current_pipeline is None:
+        return JobStatus(
+            id=None,
+            is_running=False,
+            progress=0.0,
+            status="idle",
+            current_step="",
+            total_maps=0,
+            current_map=0,
+        )
     return JobStatus(
-        id=current_job.id,
-        is_running=current_job.is_running,
-        progress=current_job.progress,
-        status=current_job.status,
-        session_id=current_job.session_id,
+        id=current_pipeline.job_id,
+        is_running=current_pipeline.is_running,
+        progress=current_pipeline.progress,
+        status=current_pipeline.status,
+        current_step=current_pipeline.current_step,
+        total_maps=current_pipeline.total_maps,
+        current_map=current_pipeline.current_map,
+        session_id=current_pipeline.session_id,
+        steps_log=list(current_pipeline.steps_log),
     )
 
 
 @app.post("/api/stop")
 def stop_analyze():
-    if not current_job.is_running:
+    if current_pipeline is None or not current_pipeline.is_running:
         raise HTTPException(status_code=400, detail="No job is running")
-    current_job.status = "stopping"
+    current_pipeline.cancel_requested = True
     return {"message": "Stop requested"}
 
 
 @app.post("/api/analyze")
-def start_analyze(req: AnalyzeRequest, background_tasks: BackgroundTasks):
-    if current_job.is_running:
+def start_analyze(req: AnalyzeRequest):
+    global current_pipeline
+
+    if current_pipeline is not None and current_pipeline.is_running:
         raise HTTPException(status_code=400, detail="A job is already running")
+
+    # Validate VLR URL
+    url = req.vlr_url.strip()
+    if not url or "vlr.gg" not in url:
+        raise HTTPException(status_code=400, detail="有効なVLR.gg URLを入力してください")
+
     job_id = str(uuid.uuid4())
-    background_tasks.add_task(run_valoscribe_task, job_id, req)
+    state = PipelineState(job_id=job_id)
+
+    current_pipeline = state
+
+    thread = threading.Thread(
+        target=_pipeline_thread,
+        args=(state, url, DATA_DIR),
+        daemon=True,
+    )
+    thread.start()
+
     return {"message": "Analysis started", "job_id": job_id}
 
 
@@ -171,9 +151,9 @@ def list_sessions():
     """List all analysis sessions with their match info."""
     sessions = []
     for d in sorted(DATA_DIR.iterdir()):
-        if not d.is_dir():
+        if not d.is_dir() or d.name.startswith("."):
             continue
-        # Look for valoscribe output dirs (contain event_log.jsonl)
+        # Walk into series sub-directories
         event_logs = list(d.rglob("event_log.jsonl"))
         if not event_logs:
             continue
